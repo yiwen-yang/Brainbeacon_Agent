@@ -1,6 +1,12 @@
+// Markdown 渲染配置
+if (window.marked) {
+    marked.setOptions({ breaks: true });
+}
+
 // 全局变量
 let currentSessionId = 'default';
 let isWaitingResponse = false;
+let isComposing = false;
 
 // DOM 元素
 const chatContainer = document.getElementById('chatContainer');
@@ -41,9 +47,16 @@ function setupEventListeners() {
         adjustTextareaHeight();
         updateSendButton();
     });
+    messageInput.addEventListener('compositionstart', () => {
+        isComposing = true;
+    });
+    messageInput.addEventListener('compositionend', () => {
+        isComposing = false;
+        updateSendButton();
+    });
     
     messageInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
+        if (e.key === 'Enter' && !e.shiftKey && !isComposing) {
             e.preventDefault();
             if (!isWaitingResponse && messageInput.value.trim()) {
                 handleSend();
@@ -151,7 +164,12 @@ function addMessage(role, content) {
     
     const messageContent = document.createElement('div');
     messageContent.className = 'message-content';
-    messageContent.textContent = content;
+    if (role === 'assistant' && window.marked && window.DOMPurify) {
+        const html = marked.parse(content);
+        messageContent.innerHTML = DOMPurify.sanitize(html);
+    } else {
+        messageContent.textContent = content;
+    }
     
     messageDiv.appendChild(avatar);
     messageDiv.appendChild(messageContent);

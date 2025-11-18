@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 
 import os
+import re
+from pathlib import Path
+import pandas as pd
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -10,12 +13,94 @@ from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 import uuid
 
+SUGGESTION_HEADER = "你还可以继续探索 👇"
+
+
+def suggestion_block():
+    return (
+        f"\n\n{SUGGESTION_HEADER}\n\n"
+        "🔍 1. 功能与疾病（OpenTargets）\n"
+        "🧬 2. 调控网络（TRRUST）\n"
+        "🧠 3. 虚拟扰动解析（BrainBeacon）\n"
+        "🛤️ 4. 信号通路（Reactome）\n"
+        "📚 5. 最新文献（PubMed/semantic）\n\n"
+        "输入 1–5 即可继续。"
+    )
+
+
+def append_suggestions(text: str) -> str:
+    """Ensure suggestion block appears at most once."""
+    text = text or ""
+    if SUGGESTION_HEADER in text:
+        return text
+    return text + suggestion_block()
+
+
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+GENE_PATTERN = re.compile(r"\b[A-Za-z0-9]{2,10}\b")
+
+
+def load_default_ko_gene() -> str | None:
+    """Load KO top1 gene as default fallback."""
+    csv_path = DATA_DIR / "gene_scores.csv"
+    try:
+        df = pd.read_csv(csv_path)
+        top_gene = df.sort_values("score_sum", ascending=False).iloc[0]["genes"]
+        return str(top_gene).upper()
+    except Exception:
+        return None
+
+
+DEFAULT_KO_GENE = load_default_ko_gene()
+
+
+def set_last_gene(session: dict, gene: str) -> None:
+    if not gene:
+        return
+    session["last_gene"] = gene.upper()
+
+
+def resolve_gene(session: dict) -> tuple[str | None, bool]:
+    """Return active gene for session, optionally falling back to KO top1."""
+    gene = session.get("last_gene")
+    used_default = False
+    if not gene and DEFAULT_KO_GENE:
+        gene = DEFAULT_KO_GENE
+        session["last_gene"] = gene
+        used_default = True
+    return gene, used_default
+
+
+def gene_notice(gene: str, used_default: bool, context: str = "") -> str:
+    if not used_default or not gene:
+        return ""
+    suffix = context if context else ""
+    return (
+        f"未检测到您输入新的基因，本次默认使用 BrainBeacon KO Top1 基因 **{gene}**"
+        f"{suffix}。\n\n"
+    )
+
+
+def extract_genes(text: str) -> list[str]:
+    """Extract likely gene symbols from free text."""
+    if not text:
+        return []
+    candidates = GENE_PATTERN.findall(text)
+    genes = []
+    for token in candidates:
+        if any(ch.isdigit() for ch in token) or token.isupper():
+            genes.append(token.upper())
+    return genes
+
 # === 自定义工具 ===
 from tools.csv_analyzer import analyze_csv
 from tools.tf_coregulation_tool import check_tf_coregulation
-from tools.opentargets_tool import query_opentargets
+from tools.opentargets_tool import opentargets_query
 from tools.brainbeacon_ko_tool import brainbeacon_ko_summary
 from tools.memory_setup import setup_memory
+from tools.literature_search import search_papers
+from tools.reactome_tool import query_pathways
 
 # =============================
 # 初始化 Flask 应用
@@ -82,8 +167,10 @@ system_prompt = SystemMessage(
 tools = [
     analyze_csv,
     check_tf_coregulation,
-    query_opentargets,
-    brainbeacon_ko_summary
+    opentargets_query,
+    brainbeacon_ko_summary,
+    search_papers,
+    query_pathways
 ]
 
 checkpointer, store = setup_memory()
@@ -159,7 +246,8 @@ def chat():
         if session_id not in sessions:
             sessions[session_id] = {
                 'messages': [system_prompt],
-                'thread_id': f"thread_{session_id}"
+                'thread_id': f"thread_{session_id}",
+                'last_gene': None
             }
 
         session = sessions[session_id]
@@ -182,6 +270,138 @@ def chat():
                 "session_id": session_id
             })
 
+        # =============================
+        # 菜单数字识别（1–5 自动映射工具）
+        # =============================
+        if normalized in ["1", "2", "3", "4", "5"]:
+            if normalized == "1":
+                gene, used_default = resolve_gene(session)
+                if not gene:
+                    reply = "暂未检测到可用的基因，请先输入基因名称。"
+                else:
+                    result = opentargets_query.run({"gene_symbol": gene})
+                    reply = gene_notice(gene, used_default, " 进行 OpenTargets 查询") + result
+            elif normalized == "2":
+                gene, used_default = resolve_gene(session)
+                if not gene:
+                    reply = "请告诉我要查询的转录因子或基因名称。"
+                else:
+                    result = check_tf_coregulation.run({
+                        "tf_list_str": "",
+                        "target_gene": gene,
+                        "species": "auto"
+                    })
+                    reply = gene_notice(gene, used_default, " 查询 TRRUST 调控网络") + result
+            elif normalized == "3":
+                reply = brainbeacon_ko_summary.run({})
+            elif normalized == "4":
+                gene, used_default = resolve_gene(session)
+                if not gene:
+                    reply = "请提供要查询的基因名称，我才能检索 Reactome 通路。"
+                else:
+                    result = query_pathways.run({
+                        "input_data": {
+                            "query_gene": gene,
+                            "limit": 10
+                        }
+                    })
+                    reply = gene_notice(gene, used_default, " 查询 Reactome 通路") + result
+            elif normalized == "5":
+                gene, used_default = resolve_gene(session)
+                if not gene:
+                    reply = "请告诉我需要检索文献的基因。"
+                else:
+                    result = search_papers.run({"gene": gene, "limit": 3})
+                    reply = gene_notice(gene, used_default, " 进行文献检索") + result
+
+            reply = append_suggestions(reply)
+            session['messages'].append(AIMessage(content=reply))
+            return jsonify({"response": reply, "session_id": session_id})
+
+        # 文献查询触发词
+        literature_keywords = ["文献", "paper", "最新研究", "研究进展", "related papers", "查文献"]
+        if any(keyword in user_message for keyword in literature_keywords):
+            genes = extract_genes(user_message)
+            notice = ""
+            if genes:
+                gene = genes[0]
+                set_last_gene(session, gene)
+            else:
+                gene, used_default = resolve_gene(session)
+                if not gene:
+                    reply = "暂未检测到要检索的基因，请先提供基因名称（如 TP53、MEG3）。"
+                    session['messages'].append(AIMessage(content=reply))
+                    return jsonify({"response": reply, "session_id": session_id})
+                notice = gene_notice(gene, used_default, " 进行文献检索")
+
+            tool_result = search_papers.run({"gene": gene, "limit": 3})
+            reply = append_suggestions(notice + tool_result)
+            session['messages'].append(AIMessage(content=reply))
+            return jsonify({"response": reply, "session_id": session_id})
+
+        # Pathway 查询触发词
+        pathway_keywords = ["通路", "pathway", "信号通路", "代谢通路", "reactome"]
+        if any(keyword in user_message for keyword in pathway_keywords):
+            genes = extract_genes(user_message)
+            notice = ""
+            if genes:
+                gene = genes[0]
+                set_last_gene(session, gene)
+            else:
+                gene, used_default = resolve_gene(session)
+                if not gene:
+                    reply = "您想查询哪个基因的通路信息？例如：TP53、STAT1、MEG3。"
+                    session['messages'].append(AIMessage(content=reply))
+                    return jsonify({"response": reply, "session_id": session_id})
+                notice = gene_notice(gene, used_default, " 查询 Reactome 通路")
+
+            tool_result = query_pathways.run({
+                "input_data": {
+                    "query_gene": gene,
+                    "limit": 10
+                }
+            })
+            reply = append_suggestions(notice + tool_result)
+            session['messages'].append(AIMessage(content=reply))
+            return jsonify({"response": reply, "session_id": session_id})
+
+        # CSV 自动分析触发词
+        csv_keywords = ["最高分", "top 基因", "显著基因", "最强基因"]
+        if any(keyword in user_message for keyword in csv_keywords):
+            csv_path = "data/gene_scores.csv"
+            tool_result = analyze_csv.run({"file_path": csv_path, "top_n": 5})
+            reply = append_suggestions(tool_result)
+            session['messages'].append(AIMessage(content=reply))
+            return jsonify({"response": reply, "session_id": session_id})
+
+        # =============================
+        # 基因名称自动识别 + 多工具联动
+        # =============================
+        gene_candidates = extract_genes(user_message)
+
+        if gene_candidates:
+            gene = gene_candidates[0]
+            set_last_gene(session, gene)
+
+            # 联动：OpenTargets + TRRUST
+            opentargets_result = opentargets_query.run({"gene_symbol": gene})
+            trrust_result = check_tf_coregulation.run({
+                "tf_list_str": "",
+                "target_gene": gene,
+                "species": "auto"
+            })
+
+            combo_reply = (
+                f"🔍 **检测到基因：{gene}**\n\n"
+                f"📌 **OpenTargets 结果：**\n{opentargets_result}\n\n"
+                f"📌 **TRRUST 调控关系：**\n{trrust_result}\n\n"
+                "如需继续查询其他基因，请告诉我基因名称。"
+            )
+
+            reply = append_suggestions(combo_reply)
+            session['messages'].append(AIMessage(content=reply))
+            return jsonify({"response": reply, "session_id": session_id})
+
         # 调用 agent
         result = agent.invoke(
             {"messages": session['messages']},
@@ -190,7 +410,7 @@ def chat():
 
         # 获取 agent 回复
         reply_msg = result["messages"][-1]
-        reply_content = reply_msg.content
+        reply_content = append_suggestions(reply_msg.content)
 
         # 保存到会话
         session['messages'].append(reply_msg)
@@ -210,7 +430,8 @@ def new_session():
     session_id = str(uuid.uuid4())
     sessions[session_id] = {
         'messages': [system_prompt],
-        'thread_id': f"thread_{session_id}"
+        'thread_id': f"thread_{session_id}",
+        'last_gene': None
     }
     return jsonify({"session_id": session_id})
 
@@ -224,7 +445,8 @@ def clear_session():
     if session_id in sessions:
         sessions[session_id] = {
             'messages': [system_prompt],
-            'thread_id': f"thread_{session_id}"
+            'thread_id': f"thread_{session_id}",
+            'last_gene': None
         }
 
     return jsonify({'status': 'cleared'})
