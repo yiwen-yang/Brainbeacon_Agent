@@ -453,4 +453,6 @@ def clear_session():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5001)
+    # Render 会自动提供 PORT 环境变量，例如 10000、45321 等
+    port = int(os.environ.get("PORT", 5001))
+    app.run(host="0.0.0.0", port=port)
