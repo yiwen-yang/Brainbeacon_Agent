@@ -19,3 +19,4 @@ openai==2.7.2
 # === 工具依赖 ===
 typing_extensions==4.15.0
 numpy==2.2.6
+gunicorn
