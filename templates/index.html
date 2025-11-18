@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BrainBeacon 智能助理</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <!-- 侧边栏 -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <button class="new-chat-btn" id="newChatBtn">
+                    <span>+</span> 新对话
+                </button>
+            </div>
+            <div class="sidebar-content">
+                <div class="chat-history">
+                    <div class="chat-item active" data-session="default">
+                        <span>新对话</span>
+                    </div>
+                </div>
+            </div>
+            <div class="sidebar-footer">
+                <div class="app-info">
+                    <h3>BrainBeacon</h3>
+                    <p>智能助理</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 主内容区 -->
+        <div class="main-content">
+            <div class="top-bar">
+                <img src="{{ url_for('static', filename='img/lg_logo.png') }}" alt="BrainBeacon Logo" class="corner-logo">
+            </div>
+            <!-- 聊天区域 -->
+            <div class="chat-container" id="chatContainer">
+                <div class="welcome-message">
+                    <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="BrainBeacon Logo" class="welcome-logo">
+                    <h1>BrainBeacon · 大脑启智</h1>
+                    <p>我是 BrainBeacon 智能助理，可以帮您：</p>
+                    <ul>
+                        <li>分析空间虚拟扰动结果</li>
+                        <li>查询转录因子共调控关系</li>
+                        <li>访问 Open Targets 数据库获取基因功能与疾病信息等</li>
+                    </ul>
+                    <p>请开始提问吧！</p>
+                </div>
+            </div>
+
+            <!-- 输入区域 -->
+            <div class="input-container">
+                <div class="input-wrapper">
+                    <textarea 
+                        id="messageInput" 
+                        placeholder="输入您的问题..." 
+                        rows="1"
+                        maxlength="2000"
+                    ></textarea>
+                    <button id="sendBtn" class="send-btn" disabled>
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                            <path d="M2 10L18 2L11 18L9 10L2 10Z" fill="currentColor"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="input-footer">
+                    <span class="hint">按 Enter 发送，Shift+Enter 换行</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
+
